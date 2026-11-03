@@ -1,6 +1,6 @@
 # Mermaid 图缩放 / 拖拽 — 产品需求
 
-> 状态：需求已确认，待实现 · 原型：[prototype.html](prototype.html)（浏览器直接打开）
+> 状态：已实现（vscode-markdown-preview-enhanced 的 `feat/mermaid-zoom` 分支），已在 VSCode 中验证 · 原型：[prototype.html](prototype.html)（浏览器直接打开）
 
 ## 1. 背景
 
@@ -36,7 +36,7 @@
 | 9 | 缩放范围 / 初始视图 | 10%–1000%；初始 = 当前 Mermaid 的显示效果（100%）；按钮每次 ×1.2 |
 | 10 | 全屏形态 | 在预览 webview 内部铺满面板的浮层，`Esc` 关闭；不依赖 Fullscreen API |
 | 11 | 快捷键 | 仅在全屏内生效 |
-| 12 | 配置 | 总开关 `enableMermaidZoom`，默认开；单个图可以用 ` ```mermaid {zoom=false} ` 关闭 |
+| 12 | 配置 | 总开关 `enableMermaidZoom`，默认开；单个图可以用 ` ```mermaid {data-zoom=false} ` 关闭（原定的 `{zoom=false}` 会被预览的 HTML 清洗器去掉，已改） |
 
 ## 4. 交互规格
 
@@ -79,7 +79,7 @@
 ### 4.4 配置
 
 - `markdown-preview-enhanced.enableMermaidZoom`（boolean，默认 `true`）。关闭后与现在的行为完全一致。
-- 代码块属性 `{zoom=false}`：只对这一个图关闭交互。
+- 代码块属性 `{data-zoom=false}`：只对这一个图关闭交互。
 
 ## 5. 边界情况
 
@@ -98,18 +98,21 @@
 4. 拖拽 ≥4px 会平移且不触发节点点击；单击节点仍然触发 `click` 链接或回调。
 5. 在源码里编辑这个图之后，它的缩放和位移保持不变。
 6. 全屏浮层里，所有快捷键可用，`Esc` 关闭后焦点回到原按钮。
-7. `enableMermaidZoom: false` 或 `{zoom=false}` 时，行为与现在一致。
+7. `enableMermaidZoom: false` 或 `{data-zoom=false}` 时，行为与现在一致。
 8. 导出 HTML / PDF 时，图中不含工具栏或变换样式。
 
-## 7. 实现建议（待在 crossnote 中核实）
+## 7. 实现方案
 
-- 渲染逻辑在 [crossnote](https://github.com/shd101wyy/crossnote) 的 webview 预览脚本里，本仓库只放文档。需要在 Mermaid 渲染完成的回调里给每个 SVG 包上 `viewport > stage` 两层，并挂载交互控制器。
-- 用 CSS `transform: translate() scale()` + `transform-origin: 0 0` 实现缩放，避免改动 SVG 本身，这样导出天然不受影响。
-- 控制器写成和图表类型无关的通用组件（入参是一个 SVG 容器），为下一期推广到其他图表留好接口。
-- 状态 Map 放在预览脚本的模块作用域里，跨重渲染保留。
-- **两个坑（已在原型中验证）**：
-  - 包裹 SVG 时要**移动**原有 DOM 节点，不能用 `innerHTML` 重建，否则 Mermaid 已绑定的 click 监听会丢。
-  - `mermaid.render()` 返回的 `bindFunctions` 依赖 Mermaid 的全局状态，下一次 `render()` 会把它清空。所以每渲染完一张图，就要在它进入文档后立刻调用 `bindFunctions`。
+- **做成扩展注入预览的独立脚本**，和扩展现有的图片灯箱（`media/lightbox.js`）同一种做法：`media/mermaid-zoom.js` 和 `media/mermaid-zoom.css`，由 `src/preview-provider.ts` 在 `enableMermaidZoom` 开启时注入预览的 `<head>`。不用改 crossnote；导出走的是另一条生成流程，天然不会带上这个脚本。
+- 用 `MutationObserver` 监听预览的 DOM 变化，每帧最多扫描一次，给 `div.mermaid` 下直接的 `<svg>` 包上 `viewport > stage` 两层。包裹时**移动**原有节点，不重建。
+- 用 CSS `transform: translate() scale()` + `transform-origin: 0 0` 实现缩放。100% 时完全不设 `transform`，保证和改动前逐像素一致。
+- 预览本来就在 `document` 的捕获阶段用 Ctrl/⌘ + 滚轮缩放整页，所以图上的滚轮监听要注册在 `window` 的捕获阶段，才能抢先处理。
+- 预览的整页缩放用的是 CSS `zoom`，所以鼠标坐标要先换算回视口内的坐标。全屏浮层带上 `fixed` 类，让预览在整页缩放时自动对它做反向缩放。
+- 视图状态按「第几个 `div.mermaid`」存在脚本的内存里，跨重渲染保留，webview 重新加载后清空。
+- **实现中踩到的坑**：
+  - 图里的链接默认可以被浏览器原生拖放，一旦触发 `dragstart` 就会取消指针事件，平移也随之中断，所以要在视口上阻止 `dragstart`。
+  - 预览容器本身的背景是透明的，全屏画布要往上找第一个不透明的背景色，否则底下的预览内容会透上来。
+  - 原型里提到的 `bindFunctions` 问题不影响实际插件：crossnote 本来就没有调用 `bindFunctions`，只要包裹时移动原有节点即可。
 
 ## 8. 原型里我自行补的决策（如有异议请提出）
 
@@ -117,3 +120,5 @@
 - 全屏里的百分比是相对 SVG 原始尺寸（viewBox）计算的；行内的百分比是相对初始显示尺寸。
 - 工具栏按钮带 `aria-label` 和 `title` 提示。
 - 不专门处理触摸屏（VSCode 是桌面端）。
+- 鼠标在图上时，Ctrl/⌘ + 滚轮缩放这张图，不再缩放整页；在图外仍然缩放整页。
+- 演示模式（reveal.js 幻灯片）里不启用。
